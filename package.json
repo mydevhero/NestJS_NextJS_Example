@@ -1,0 +1,20 @@
+{
+  "name": "NestJS_NextJS_Example",
+  "version": "1.0.0",
+  "description": "È un esempio NestJS/NextJS fichissmo!",
+  "author": "Alessandro Bianco <mydevhero@gmail.com>",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "dev": "bin/start_db.sh && pnpm -r run dev",
+    "test": "pnpm -r run test",
+    "test:e2e": "pnpm -r run test:e2e",
+    "build": "pnpm -r run build",
+    "prisma:studio": "pnpm -r prisma:studio",
+    "app_install": "pnpm install && pnpm -r run app_install",
+    "setup": "./setup.sh"
+  },
+  "keywords": [],
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.1"
+}

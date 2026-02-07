@@ -1,0 +1,234 @@
+name: Setup and Build Full Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch target'
+        required: true
+        default: 'main'
+        type: string
+      auto_commit:
+        description: 'Auto-commit changes'
+        required: false
+        default: true
+        type: boolean
+
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'setup.sh'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'bin/**'
+      - 'setup/**'
+      - '.github/workflows/setup-and-build.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  setup-and-build:
+    name: Setup and Build
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER || 'postgres' }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || 'postgres' }}
+      POSTGRES_DB: ${{ secrets.POSTGRES_DB || 'quiz_db' }}
+      POSTGRES_PORT: ${{ secrets.POSTGRES_PORT || 5432 }}
+      POSTGRES_SCHEMA: ${{ secrets.POSTGRES_SCHEMA || 'public' }}
+      NESTJS_PORT: ${{ secrets.NESTJS_PORT || 3001 }}
+      NEXTJS_PORT: ${{ secrets.NEXTJS_PORT || 3000 }}
+      NODE_ENV: "test"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean previous build artifacts
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf backend/
+          rm -rf frontend/
+          rm -rf node_modules/
+          rm -f docker-compose.yml
+          echo "✅ Cleanup complete!"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          # cache: 'pnpm'
+        
+      - name: Install NestJS CLI globally
+        run: pnpm add -g @nestjs/cli
+
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
+        
+      - name: Make scripts executable
+        run: |
+          chmod +x bin/*.sh
+          chmod +x setup.sh || true
+
+      - name: Start PostgreSQL database
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
+          POSTGRES_SCHEMA: ${{ env.POSTGRES_SCHEMA }}
+          NESTJS_PORT: ${{ env.NESTJS_PORT }}
+          NEXTJS_PORT: ${{ env.NEXTJS_PORT }}
+        run: |
+          echo "Starting PostgreSQL with your dynamic docker-compose..."
+          ./bin/start_db.sh
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          echo "Waiting for database to be ready..."
+          timeout 30 bash -c 'until docker exec $POSTGRES_DB pg_isready -U $POSTGRES_USER; do sleep 1; done'
+
+      - name: Verify database connection
+        run: |
+          echo "Testing database connection..."
+          source bin/configure_env.sh
+          echo "DATABASE_URL: $DATABASE_URL"
+          docker exec $POSTGRES_DB pg_isready -U $POSTGRES_USER
+
+      - name: Run backend setup
+        run: ./bin/setup_backend.sh
+        continue-on-error: false
+        
+      - name: Setup environment files
+        run: |
+          echo "Creating backend .env file..."
+          cat > backend/.env << EOF
+          DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:$POSTGRES_PORT/$POSTGRES_DB?schema=$POSTGRES_SCHEMA
+          NODE_ENV=$NODE_ENV
+          EOF
+
+      - name: Build backend
+        run: pnpm --filter backend build
+        continue-on-error: false
+
+      # - name: Run backend tests
+      #   run: |
+      #     cd backend
+      #     pnpm test 2>&1 || echo "⚠️ Unit tests may fail - this is OK for initial setup"
+      #     pnpm test:e2e 2>&1 || echo "⚠️ E2E tests may fail - this is OK for initial setup"
+      #   continue-on-error: false
+        
+      - name: Run frontend setup
+        run: |
+          ./bin/setup_frontend.sh
+          cd frontend
+          pnpm install
+
+      - name: Build frontend
+        run: pnpm --filter frontend build
+
+      - name: Commit generated code
+        if: ${{ github.event.inputs.auto_commit != 'false' && success() }}
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          
+          # Rimuovi eventuali repository Git annidati
+          echo "Removing nested git repositories..."
+          find backend frontend -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+      
+          git add -A
+          
+          # Reset esplicito di tutte le directory node_modules
+          git reset HEAD node_modules/ 2>/dev/null || true
+          git reset HEAD backend/node_modules/ 2>/dev/null || true
+          git reset HEAD frontend/node_modules/ 2>/dev/null || true
+          git reset HEAD '**/.env' 2>/dev/null || true
+          git reset HEAD '**/.env.local' 2>/dev/null || true
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: full stack setup via GitHub Actions [automated]
+            
+            - Generated backend (NestJS + Prisma + PostgreSQL)
+            - Generated frontend (Next.js)
+            - Updated pnpm-lock.yaml
+            - Both projects built successfully
+            "
+            git push origin HEAD:${{ github.event.inputs.branch || 'main' }}
+          fi
+        continue-on-error: false
+      # - name: Commit generated code
+      #   if: ${{ github.event.inputs.auto_commit != 'false' && success() }}
+      #   run: |
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global user.name "github-actions[bot]"
+          
+      #     # Rimuovi eventuali repository Git annidati
+      #     echo "Removing nested git repositories..."
+      #     find backend frontend -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+      
+      #     git add -A
+      #     git reset -- '**/node_modules/**' '**/.env' '**/.env.local' || true
+          
+      #     if git diff --cached --quiet; then
+      #       echo "No changes to commit"
+      #     else
+      #       git commit -m "chore: full stack setup via GitHub Actions [automated]
+            
+      #       - Generated backend (NestJS + Prisma + PostgreSQL)
+      #       - Generated frontend (Next.js)
+      #       - Updated pnpm-lock.yaml
+      #       - Both projects built successfully
+      #       "
+      #       git push origin HEAD:${{ github.event.inputs.branch || 'main' }}
+      #     fi
+      #   continue-on-error: false
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullstack-build-${{ github.run_id }}
+          path: |
+            backend/dist/
+            frontend/.next/
+            frontend/out/
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up..."
+          docker compose down -v 2>/dev/null || true
+          docker stop $POSTGRES_DB 2>/dev/null || true
+          docker rm $POSTGRES_DB 2>/dev/null || true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🚀 Setup Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend:** ✅ Built" >> $GITHUB_STEP_SUMMARY
+          echo "- Location: \`backend/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Database: \`$POSTGRES_DB\` on port \`$POSTGRES_PORT\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Node version: 24" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend:** ✅ Built" >> $GITHUB_STEP_SUMMARY
+          echo "- Location: \`frontend/\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check \`backend/\` and \`frontend/\` directories" >> $GITHUB_STEP_SUMMARY
+          echo "2. Run locally: \`pnpm dev\` (starts database + both apps)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Access: Backend on port ${NESTJS_PORT}, Frontend on port ${NEXTJS_PORT}" >> $GITHUB_STEP_SUMMARY

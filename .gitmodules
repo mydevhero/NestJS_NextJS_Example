@@ -1,0 +1,3 @@
+[submodule "doc/Fullstack-recruiting"]
+	path = doc/Fullstack-recruiting
+	url = https://github.com/TecnoNews/Fullstack-recruiting.git

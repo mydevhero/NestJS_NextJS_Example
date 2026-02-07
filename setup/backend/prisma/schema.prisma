@@ -1,0 +1,63 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Aggiunto dallo script setup.sh
+
+/**
+ * Rappresenta un utente del sistema.
+ */
+model User {
+  id            Int      @id @default(autoincrement())                  // Serial
+  email         String   @unique
+  nickname      String   @unique
+  answers       Answer[]
+}
+
+/**
+ * Rappresenta un quiz.
+ */
+model Quiz {
+  id            Int      @id @default(autoincrement())                  // Serial
+  question      String
+  options       String[]                                                // Array di stringhe per le 4 opzioni
+
+  // Inserisco direttamente il valore della risposta che deve corrispondere all'elemento di options
+  // correctAnswer String
+  correctAnswer Int                                                     // Punta all'id di options con la risposta
+                                                                        // ├── corretta
+  explanation   String
+  answers       Answer[]                                                // Array delle risposte
+}
+
+/**
+ * Relazione tra Utente e Quiz per tracciare le risposte date.
+ */
+model Answer {
+  id            Int      @id @default(autoincrement())                  // Serial
+
+  user          User     @relation(fields: [userId], references: [id])  // Foreign key
+  userId        Int                                                     // ├── referenzia la tabella "User" al campo "id"
+
+  quiz          Quiz     @relation(fields: [quizId], references: [id])  // Foreign key
+  quizId        Int                                                     // ├── referenzia la tabella "Quiz" al campo "id"
+
+  isCorrect Boolean
+  createdAt DateTime    @default(now())
+
+  selectedOption Int?
+
+  @@unique([userId, quizId])                                            // Setta una constraint unique che impedisce di
+                                                                        // ├── rispondere due volte allo stesso quiz
+}
